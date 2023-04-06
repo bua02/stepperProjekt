@@ -56,6 +56,7 @@ uint32_t setpos = 0;
 uint32_t offset = 0;
 uint32_t potipos = 0;
 uint32_t charCounter = 0;
+uint32_t timersteps = 0;
 _Bool direction = false;
 _Bool wiggleFlag = false;
 _Bool startFlag = true;
@@ -98,6 +99,7 @@ System_state system_state = start_state;
 
 void receiveUART(UART_HandleTypeDef uart, uint8_t receiveBuffer[BUFFERSIZE]){
 	  HAL_UART_Receive_IT(&huart2, receiveBuffer, BUFFERSIZE);
+	  HAL_UART_Receive_IT(&huart1, receiveBuffer, BUFFERSIZE);
 	  	  for (;rxDone == false;){
 	  		  datapointer = 0;
 				if(dataBuffer[datapointer] == '#'){
@@ -167,31 +169,9 @@ int main(void)
 
   while (1)
   {
-	  //uart_buf_len = sprintf(uart_buf, "Position: %d\r\n", position);
-	  //HAL_UART_Transmit(&huart2, (uint8_t*)uart_buf, uart_buf_len, 100);
+	  switch(system_state) { //State machine wechselt zwischen den verschiedenen zuständen die das System einnehmen kann
 
-	  /*
-	  HAL_UART_Receive_IT(&huart2, receiveBuffer, BUFFERSIZE);
-	  if (rxDone == true){
-	  				if(dataBuffer[datapointer] == '#'){
-	  					datapointer++;
-	  				  if(dataBuffer[datapointer] ==  'p'){
-	  					  datapointer++;
-	  					  for(; dataBuffer[datapointer] != ','; datapointer++);
-	  					  sscanf(dataBuffer+1+datapointer, "%d\n", &potipos);
-	  					  buttonPressed = true;
-	  					  }
-	  					  rxDone = false;
-	  				  //}else if(dataBuffer[datapointer] == 'b'){
-	  					  //buttonPressed = true;
-	  					  //rxDone = false;
-	  				  }//else HAL_UART_Transmit_IT(&huart2, (uint8_t*)notAcknowledge, BUFFERSIZE);
-	  				}//else HAL_UART_Transmit_IT(&huart2, (uint8_t*)notAcknowledge, BUFFERSIZE);*/
-
-
-	  switch(system_state) {
-
-	  	  case set_time_state:{
+	  	  case set_time_state:{ //State um die Zeit einzustellen
 	  		setTimeFlag = true;
 
 	  		if(!receiveFlag){
@@ -216,16 +196,17 @@ int main(void)
 	  		}
 	  	  }break;
 
-	  	  case timer_state:{
-	  		/*if(PositionIsZero){
-	  			system_state = ring_state;
-	  		}*/
-	  		if (!doneOnce){
+	  	  case timer_state:{ //state während die Zeit abläuft
+
+	  		HAL_GPIO_WritePin(MS1_GPIO_Port, MS1_Pin, GPIO_PIN_SET);
+	  		HAL_GPIO_WritePin(MS2_GPIO_Port, MS2_Pin, GPIO_PIN_SET);
+
+	  		if (!doneOnce){ //enabled beim ersten durchlauf wieder den Interrupt, damit sich der Motor bewegt
 	  			HAL_NVIC_EnableIRQ(54);
 	  			doneOnce = true;
 	  		}
 
-			  if(switchstate){
+			  if(switchstate){ //bereitet die Variablen für den nächsten state vor
 				   system_state = ring_state;
 				   receiveFlag = false;
 				   switchstate = false;
@@ -235,8 +216,10 @@ int main(void)
 			  }
 	  	  }break;
 
-	  	  case ring_state:{
+	  	  case ring_state:{ //state während dem klingeln
 	  		  wiggleFlag = true;
+	  		  HAL_GPIO_WritePin(MS1_GPIO_Port, MS1_Pin, GPIO_PIN_RESET); //wechselt Geschwindigkeit
+	  		  HAL_GPIO_WritePin(MS2_GPIO_Port, MS2_Pin, GPIO_PIN_RESET);
 
 	  		  if(!receiveFlag){
 	  			  HAL_UART_Transmit_IT(&huart2, (uint8_t*)waitForInput, BUFFERSIZE);
@@ -244,7 +227,7 @@ int main(void)
 	  			  receiveFlag = true;
 	  		  }
 
-	  		  if(buttonPressed){
+	  		  if(buttonPressed){//bereitet die Variablen für den nächsten state vor
 	  			  system_state = set_time_state;
 	  			  receiveFlag = false;
 	  			  buttonPressed = false;
@@ -253,11 +236,11 @@ int main(void)
 	  		  }
 	  	  }break;
 
-	  	  case start_state:{
+	  	  case start_state:{ //start state, zeigt wenn bereit
 
 	  		  startFlag = true;
 
-	  		  if(switchstate){
+	  		  if(switchstate){//bereitet die Variablen für den nächsten state vor
 	  			  system_state = set_time_state;
 	  			  switchstate = false;
 	  		  }
@@ -476,14 +459,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 
 	switch(system_state){
 		case set_time_state:{
-			if (position < setpos){
+			if (position < setpos){ //richtige Richtung einstellen um zur gewünschten Position zu fahren
 				HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, RESET);
 				direction = false;
 			} else {
 				HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, SET);
 				direction = true;
 			}
-			if(position == setpos){
+			if(position == setpos){ //wenn die gewünschte Position erreicht wurde
 				HAL_NVIC_DisableIRQ(54);
 				switchstate = true;
 			}
@@ -494,7 +477,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 				HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, SET);
 				direction = true;
 			}
-			if(position == 0){
+			if(position == 0){ //Zeit abgelaufen
 				//HAL_NVIC_DisableIRQ(54);
 				switchstate = true;
 				HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, RESET); //prepare direction for ring_state
@@ -505,10 +488,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 		}
 		case ring_state:{
 			stepCount++;
-			if (stepCount%WIGGLEANGLE == 0){
+			if (stepCount%WIGGLEANGLE == 0){ //Wenn es sich um den Winkel bewegt hat
 				stepCount = stepCount % WIGGLEANGLE;
 				//HAL_GPIO_TogglePin(DIR_GPIO_Port, DIR_Pin);
-				if(direction == false){
+				if(direction == false){ //Richtung wechseln wenn Winkel richtig
 					HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, SET);
 					direction = true;
 				}else{
@@ -520,7 +503,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 		}
 		case start_state:{
 			startsteps++;
-			if(startsteps < WIGGLEANGLE * 2){
+			if(startsteps < WIGGLEANGLE * 2){//einmal klingeln
 				if(startsteps <= WIGGLEANGLE){
 					HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, RESET);
 					direction = false;
@@ -529,51 +512,38 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 					direction = true;
 				}
 			}else{
-				HAL_NVIC_DisableIRQ(54);
+				HAL_NVIC_DisableIRQ(54);//Motor stoppen
 				switchstate = true;
 			}
 			break;
 		}
 	}
 
-	/*if (wiggleFlag){
-		if (stepCount%WIGGLEANGLE == 0){
-		HAL_GPIO_TogglePin(DIR_GPIO_Port, DIR_Pin);
-			if(direction == true){
-				direction = false;
-			}else{
-				direction = true;
+	if(direction == false){ //false entspricht einer Drehung laut Uhrzeigersinn und Position ++
+		//position++;
+
+		if(system_state == timer_state){
+			timersteps++;
+			if(timersteps%8 == 0){
+				timersteps = 0;
+				position++;
 			}
+		}else{
+			position++;
 		}
-	}else if(startFlag){
-		startsteps++;
-		if(startsteps <= WIGGLEANGLE * 2){
-			if(startsteps <= WIGGLEANGLE){
-				HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, SET);
-				direction = false;
-			} else if (startsteps > WIGGLEANGLE) {
-				HAL_GPIO_WritePin(DIR_GPIO_Port, DIR_Pin, RESET);
-				direction = true;
-			}
-		} else {
-
-			HAL_NVIC_DisableIRQ(54);
-			switchstate = true;
-			//disable interrupts -> switch to next state
-		}
-	}else if (setTimeFlag){
-		if(position == setpos){
-			HAL_NVIC_DisableIRQ(54);
-		}
-	}*/
-
-
-	if(direction == false){
-		position++;
 		position = position % FULLROTATION;
-	}
-	else {
-		position--;
+	}else { //andere Richtung entspricht position--
+		if(system_state == timer_state){
+			timersteps++;
+			if(timersteps%8 == 0){
+				timersteps = 0;
+				position--;
+			}
+		}else{
+			position--;
+		}
+
+
 		position = position % FULLROTATION;
 	}
 
@@ -583,7 +553,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim){
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
-	for(uint8_t i = 0; i <= 7; i++){
+	for(uint8_t i = 0; i <= 7; i++){ //Kopiert alles aus dem UART buffer in mein Databuffer
 		dataBuffer[i] = receiveBuffer[i];
 		if(receiveBuffer[i] == '\r'){
 			rxDone = false;
@@ -591,7 +561,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
 		}
 	}
 
-	HAL_UART_Transmit_IT(&huart2, (uint8_t *)receiveMsg, BUFFERSIZE);
+	HAL_UART_Transmit_IT(&huart2, (uint8_t *)receiveMsg, BUFFERSIZE); //schickt Acknowledge
 	HAL_NVIC_DisableIRQ(54);
 
 }
